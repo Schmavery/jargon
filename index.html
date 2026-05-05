@@ -1,87 +1,80 @@
 <!doctype html>
 <html lang="en">
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Entries</title>
-<style>
-  body{font:16px/1.45 system-ui,sans-serif;max-width:760px;margin:2rem auto;padding:0 1rem}
-  article{border-top:1px solid #ddd;padding:1rem 0}
-  h2{margin:0 0 .6rem;font-size:1.05rem}
-  p{margin:.55rem 0}
-  .muted{color:#666}
-</style>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Entries</title>
+  <style>
+    body { font: 16px/1.45 system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+    article { border-top: 1px solid #ddd; padding: 1rem 0; position: relative; }
+    h2 { margin: 0 0 .6rem; font-size: 1.05rem; }
+    .edit { position: absolute; right: 0; top: 1rem; color: #888; font-size: .9rem; text-decoration: none; }
+    .edit:hover { text-decoration: underline; }
+    .muted { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>Entries</h1>
+  <p id="status" class="muted">Loading…</p>
+  <div id="list"></div>
 
-<h1>Entries</h1>
-<p id="status" class="muted">Loading…</p>
-<div id="list"></div>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    (async () => {
+      const status = document.getElementById("status");
+      const list = document.getElementById("list");
+      const idFor = (name) => encodeURIComponent(name);
 
-<script>
-(async () => {
-  const status = document.getElementById("status");
-  const list = document.getElementById("list");
+      try {
+        const files = await fetch(
+          "https://api.github.com/repos/Schmavery/jargon/contents/entries?ref=main"
+        ).then((r) => {
+          if (!r.ok) throw new Error(`GitHub API ${r.status}`);
+          return r.json();
+        });
 
-  try {
-    const files = await fetch(`https://api.github.com/repos/Schmavery/jargon/contents/entries?ref=main`)
-      .then(r => { if (!r.ok) throw new Error(`GitHub API ${r.status}`); return r.json(); });
+        const mdFiles = files
+          .filter((f) => f.type === "file" && /\.md$/i.test(f.name))
+          .sort((a, b) => a.name.localeCompare(b.name));
 
-    const mdFiles = files
-      .filter(f => f.type === "file" && /\.md$/i.test(f.name))
-      .sort((a, b) => a.name.localeCompare(b.name));
+        const names = new Set(mdFiles.map((f) => f.name.toLowerCase()));
+        const docs = await Promise.all(
+          mdFiles.map(async (f) => ({
+            name: f.name,
+            text: await fetch(f.download_url).then((r) => r.text()),
+          }))
+        );
 
-    if (!mdFiles.length) {
-      status.textContent = "No entries/*.md files found.";
-      return;
-    }
+        list.innerHTML = docs.map((doc) => `
+          <article id="${idFor(doc.name)}">
+            <a class="edit"
+               href="https://github.com/Schmavery/jargon/edit/main/entries/${encodeURIComponent(doc.name)}"
+               target="_blank" rel="noopener noreferrer">edit</a>
+            <h2>${doc.name}</h2>
+            ${marked.parse(doc.text)}
+          </article>
+        `).join("");
 
-    const names = new Set(mdFiles.map(f => f.name.toLowerCase()));
-    const docs = await Promise.all(mdFiles.map(async f => ({
-      name: f.name,
-      text: await fetch(f.download_url).then(r => r.text())
-    })));
+        list.querySelectorAll('a[href]').forEach((a) => {
+          const href = a.getAttribute("href") || "";
+          if (/^(https?:|mailto:|#)/i.test(href)) return;
 
-    list.innerHTML = docs.map(d => `
-      <article id="${idFor(d.name)}">
-        <h2><a href="#${idFor(d.name)}">${escapeHtml(d.name)}</a></h2>
-        ${renderMarkdown(d.text, names)}
-      </article>
-    `).join("");
+          const file = decodeURIComponent(
+            href.split("?")[0].split("#")[0].split("/").pop() || ""
+          );
 
-    status.textContent = `Loaded ${docs.length} files`;
-  } catch (e) {
-    status.textContent = `Failed to load entries: ${e.message}`;
-  }
+          if (names.has(file.toLowerCase())) {
+            a.setAttribute("href", `#${idFor(file)}`);
+          } else if (!/\.md$/i.test(file) && names.has(`${file.toLowerCase()}.md`)) {
+            a.setAttribute("href", `#${idFor(file + ".md")}`);
+          }
+        });
 
-  function idFor(filename) {
-    return encodeURIComponent(filename);
-  }
-
-  function escapeHtml(s) {
-    return s.replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;" }[c]));
-  }
-
-  function rewriteHref(url, names) {
-    if (/^(https?:|mailto:|#)/i.test(url)) return url;
-    const raw = url.split("#")[0].split("?")[0];
-    const file = decodeURIComponent(raw.split("/").pop() || raw);
-    if (names.has(file.toLowerCase())) return `#${idFor(file)}`;
-    if (!/\.md$/i.test(file) && names.has((file + ".md").toLowerCase())) return `#${idFor(file + ".md")}`;
-    return url;
-  }
-
-  function renderInline(s, names) {
-    let t = escapeHtml(s);
-    t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) =>
-      `<a href="${escapeHtml(rewriteHref(url.trim(), names))}">${label}</a>`);
-    t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    t = t.replace(/_([^_]+)_/g, "<em>$1</em>");
-    return t;
-  }
-
-  function renderMarkdown(md, names) {
-    return md.trim().split(/\n\s*\n/).map(block =>
-      `<p>${renderInline(block.trim(), names).replace(/\n/g, "<br>")}</p>`
-    ).join("");
-  }
-})();
-</script>
+        status.remove();
+      } catch (e) {
+        status.textContent = `Failed to load entries: ${e.message}`;
+      }
+    })();
+  </script>
+</body>
 </html>
